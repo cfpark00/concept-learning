@@ -1,0 +1,134 @@
+batch_size: 64
+data_params:
+  bg_color:
+    maxs:
+    - - 1.0
+      - 1.0
+      - 1.0
+    - - 0.2
+      - 0.2
+      - 0.2
+    means:
+    - - 0.9
+      - 0.9
+      - 0.9
+    - - 0.1
+      - 0.1
+      - 0.1
+    mins:
+    - - 0.8
+      - 0.8
+      - 0.8
+    - - 0.0
+      - 0.0
+      - 0.0
+    s_n: 0.0
+  color:
+    maxs:
+    - - 1.0
+      - 0.19999999999999998
+      - 0.19999999999999998
+    - - 0.19999999999999998
+      - 0.19999999999999998
+      - 1.0
+    means:
+    - - 0.9
+      - 0.09999999999999998
+      - 0.09999999999999998
+    - - 0.09999999999999998
+      - 0.09999999999999998
+      - 0.9
+    mins:
+    - - 0.8
+      - -2.7755575615628914e-17
+      - -2.7755575615628914e-17
+    - - -2.7755575615628914e-17
+      - -2.7755575615628914e-17
+      - 0.8
+    s_n: 0.0
+  comp_dims:
+    bg_color: null
+    color: 2
+    shape: null
+    size: 2
+    x: null
+    y: null
+  image_size: 32
+  n_classes: 4
+  noise_level: 0.001
+  size:
+    maxs:
+    - 0.8
+    - 0.4
+    means:
+    - 0.65
+    - 0.25
+    min: 0.1
+    mins:
+    - 0.5
+    - 0.09999999999999998
+    s_n: 0.0
+  x:
+    max: 0.5
+    min: -0.5
+    n: null
+    s: 0.05
+    s_n: 0.0
+  y:
+    max: 0.5
+    min: -0.5
+    n: null
+    s: 0.05
+    s_n: 0.0
+dataset: images_1
+experiment_directory: data/images_1/2x2_final2/detailed/sep_col=0.8_sep_size=0.4/seed=100
+fig_n_col: 2
+model_params:
+  beta_settings:
+    gamma_max: 10.0
+    gamma_min: -5.0
+    noise_schedule: learned_linear
+    type: logsnr
+  data_noise: 0.001
+  model_type: VDiff
+  network_params:
+    chs:
+    - 64
+    - 128
+    - 256
+    init_scale: 1.0
+    mid_attn: true
+    num_res_blocks: 2
+    v_conditioning_dims:
+    - 11
+    v_conditioning_type: sep_mlp
+  optimizer_params:
+    lr: 0.001
+    weight_decay: 0.01
+  optimizer_type: AdamW
+n_samples_test:
+- 0
+- 0
+- 0
+- 32
+n_samples_test_gen:
+- 0
+- 0
+- 0
+- 32
+n_samples_train:
+- 2048
+- 2048
+- 2048
+- 0
+n_samples_train_gen:
+- 32
+- 32
+- 32
+- 0
+num_steps: 20000
+save_ckpts: false
+save_steps: 60
+save_steps_start: 500
+seed: 100
+train_ratio: 0.85
