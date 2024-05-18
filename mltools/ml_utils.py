@@ -14,7 +14,7 @@ def seed_all(seed):
     torch.backends.cudnn.benchmark=False
     np.random.seed(seed)
 
-def train(model,dl_tr,dl_val,batch_to_kwargs,n_steps,callback_steps,callbacks,device,**kwargs):
+def train(model,dl_tr,batch_to_kwargs,n_steps,callback_steps,callbacks,device,**kwargs):
     clip_grad_norm=kwargs.get("clip_grad_norm",0.01)
     verbose=kwargs.get("verbose",1)
     online_losses=[]

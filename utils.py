@@ -544,7 +544,8 @@ def get_model(config):
             model=models.GenDiff(net=net,beta_settings=beta_settings)
         elif model_type=="VDiff":
             assert "data_noise" in model_params
-            model=models.GenVDiff(net=net,beta_settings=beta_settings,data_noise=model_params["data_noise"])
+            model=models.GenVDiff(net=net,beta_settings=beta_settings,data_noise=model_params["data_noise"],
+                                  p_cfg=model_params.get("p_cfg",None),w_cfg=model_params.get("w_cfg",None))
         else:
             raise NotImplementedError(f"Model type {model_type} not implemented")
         

@@ -170,7 +170,7 @@ class GenDiff(nn.Module):
 from mltools.models import vdm_model
 
 class GenVDiff(nn.Module):
-    def __init__(self,net,beta_settings,data_noise):
+    def __init__(self,net,beta_settings,data_noise,p_cfg=None,w_cfg=None):
         super().__init__()
         self.shape=net.shape
         assert beta_settings["type"]=="logsnr"
@@ -181,7 +181,9 @@ class GenVDiff(nn.Module):
                                  noise_schedule=beta_settings["noise_schedule"],
                                  gamma_min=beta_settings["gamma_min"],
                                  gamma_max=beta_settings["gamma_max"],
-                                 data_noise=self.data_noise)
+                                 data_noise=self.data_noise,
+                                 p_cfg=p_cfg,
+                                 w_cfg=w_cfg)
     
     def get_loss(self,c,x,reduction="mean"):
         if reduction=="mean":
@@ -205,18 +207,24 @@ class GenVDiff(nn.Module):
         return self.__class__.get_min_vlb_(self.data_noise,np.prod(self.shape))
 
 class Classifier(nn.Module):
-    def __init__(self,net,n_classes):
+    def __init__(self,net,n_classes=None,out_dim=None):
         super().__init__()
         self.net=net
         self.shape=net.shape
-        self.n_classes=n_classes
+        if out_dim is not None:
+            assert n_classes is None
+            self.n_classes=None
+            self.out_dim=out_dim
+        else:
+            self.n_classes=n_classes
+            self.out_dim=np.sum(n_classes)
         self.out_channels=self.net.out_channels
         self.head=nn.Sequential(
             nn.GroupNorm(num_groups=4,num_channels=self.out_channels),
             nn.Linear(self.out_channels,64),
             nn.GELU(),
             nn.GroupNorm(num_groups=4,num_channels=64),
-            nn.Linear(64,np.sum(self.n_classes))
+            nn.Linear(64,self.out_dim)
         )
 
     def unravel_index(self,index):
@@ -233,15 +241,19 @@ class Classifier(nn.Module):
 
     def get_loss(self,x,l):
         logits=self(x)
-        classes=self.unravel_index(l)
-        loss=0
-        start=0
-        for i,n_class in enumerate(self.n_classes):
-            loss+=nn.functional.cross_entropy(logits[:,start:start+n_class],classes[i])
-            start+=n_class
+        if self.n_classes is None:
+            return nn.functional.mse_loss(logits,l)
+        else:
+            classes=self.unravel_index(l)
+            loss=0
+            start=0
+            for i,n_class in enumerate(self.n_classes):
+                loss+=nn.functional.cross_entropy(logits[:,start:start+n_class],classes[i])
+                start+=n_class
         return loss
     
     def classify(self,x,return_probs=False,return_logits=False):
+        assert self.n_classes is not None, "This is a regression model, use regress instead"
         if return_probs and return_logits:
             raise ValueError("Only one of return_probs and return_logits can be True")
         logits=self(x)
@@ -256,4 +268,7 @@ class Classifier(nn.Module):
                 classes.append(torch.argmax(logits[:,start:start+n_class],dim=1))
             start+=n_class
         return classes
+    
+    def regress(self,x):
+        return self(x)
         

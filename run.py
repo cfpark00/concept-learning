@@ -119,7 +119,7 @@ if __name__ == "__main__":
     else:
         callbacks=[append_save_step,append_val_te_loss,generate]
 
-    train_results=ml_utils.train(model=model,dl_tr=tr_loader,dl_val=val_loader,batch_to_kwargs=batch_to_kwargs,
+    train_results=ml_utils.train(model=model,dl_tr=tr_loader,batch_to_kwargs=batch_to_kwargs,
     n_steps=config["num_steps"],callback_steps=config["save_steps"],callbacks=callbacks,device=device)
     time_tr=train_results["time_tr"]
     time_callbacks=train_results["time_callbacks"]

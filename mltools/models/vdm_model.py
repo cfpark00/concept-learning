@@ -26,6 +26,8 @@ class VDM(nn.Module):
         gamma_max: float = 5.0,
         antithetic_time_sampling: bool = True,
         data_noise: float = 1.0e-3,
+        p_cfg=None,
+        w_cfg=None
     ):
         """Variational diffusion model, continuous time implementation of arxiv:2107.00630.
 
@@ -65,6 +67,8 @@ class VDM(nn.Module):
         else:
             raise ValueError(f"Unknown noise schedule {noise_schedule}")
         self.antithetic_time_sampling = antithetic_time_sampling
+        self.p_cfg = p_cfg
+        self.w_cfg = w_cfg
 
     def variance_preserving_map(
         self, x: Tensor, times: Tensor, noise: Optional[Tensor] = None
@@ -216,6 +220,15 @@ class VDM(nn.Module):
         Returns:
             float: loss
         """
+        if self.p_cfg is not None:
+            assert "v_conditionings" in kwargs, "Need v_conditionings to mask out"
+            batch_size=x.shape[0]
+            mask=torch.rand(batch_size)<self.p_cfg
+            #print("masking out",mask.float().mean(),"of conditioning" )
+            v_conditionings=kwargs["v_conditionings"]
+            for v in v_conditionings:
+                v[mask,:]=0.
+            kwargs["v_conditionings"]=v_conditionings
         bpd_factor = 1 / (np.prod(x.shape[1:]) * np.log(2))
         # Sample from q(x_t | x_0) with random t.
         times = self.sample_times(
@@ -318,11 +331,32 @@ class VDM(nn.Module):
         alpha_s = self.alpha(gamma_s)
         sigma_t = self.sigma(gamma_t)
         sigma_s = self.sigma(gamma_s)
-        pred_noise = self.score_model(
-            zt,
-            t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
-            **kwargs
-        )
+        if self.w_cfg is None:
+            pred_noise = self.score_model(
+                zt,
+                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
+                **kwargs
+            )
+        else:
+            assert "v_conditionings" in kwargs, "Need v_conditionings to mask out"
+            v_conditionings=kwargs["v_conditionings"]
+            v_conditionings_orig=[v.clone() for v in v_conditionings]
+            for v in v_conditionings:
+                v[:]=0.
+            kwargs["v_conditionings"]=v_conditionings
+            pred_noise_uncond = self.score_model(
+                zt,
+                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
+                **kwargs
+            )
+            kwargs["v_conditionings"]=v_conditionings_orig
+            pred_noise_cond=self.score_model(
+                zt,
+                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
+                **kwargs
+            )
+            pred_noise=pred_noise_uncond+self.w_cfg*(pred_noise_cond-pred_noise_uncond)
+            #print("Used w_cfg",self.w_cfg)
         if not return_ddnm:
             mean = alpha_s / alpha_t * (zt - c * sigma_t * pred_noise)
             scale = sigma_s * torch.sqrt(c)

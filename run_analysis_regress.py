@@ -30,13 +30,8 @@ if __name__ == "__main__":
 
     regen=False
 
-    #suffix=""
-    #classifier_ckpt_path="./data/images_1/2x2_final2/classifier_combined.pth"
-    #n_classes=[2,2]
-
     suffix=""
-    classifier_ckpt_path="./data/images_1/2x2x2_final/classifier_combined.pth"
-    n_classes=[2,2,2]
+    classifier_ckpt_path="./data/images_1/2x2_final2/regressor_combined.pth"
 
     ####
     device=cuda_tools.get_freer_device(verbose=False)
@@ -45,14 +40,14 @@ if __name__ == "__main__":
     config=utils.load_config(yaml_path)
 
     net=networks.CUNet(shape=(3,32,32),out_channels=64,chs=[32,32,32],norm_groups=4)
-    classifier=models.Classifier(net=net,n_classes=n_classes)
+    classifier=models.Classifier(net=net,out_dim=11)
     classifier=classifier.to(device)
     classifier.load_state_dict(torch.load(classifier_ckpt_path))
     classifier=classifier.eval()
 
     fol=config["experiment_directory"]
 
-    plot_data_path=os.path.join(fol,"plot_data"+suffix+".pth")
+    plot_data_path=os.path.join(fol,"plot_data_reg"+suffix+".pth")
     config_file=glob.glob(os.path.join(fol,"*.yaml"))[0]
     config=utils.load_config(config_file)
     logs_file=os.path.join(fol,"logs.pth")
@@ -62,8 +57,8 @@ if __name__ == "__main__":
     n_classes=config["data_params"]["n_classes"]
     #losses
     ckpts=[]
-    classprobs_pred_tr=[]
-    classprobs_pred_te=[]
+    ys_pred_tr=[]
+    ys_pred_te=[]
     gens_tr=[]
     gens_te=[]
 
@@ -89,18 +84,15 @@ if __name__ == "__main__":
                 loss_te=model.get_loss(x=x_te_torch,c=y_te_torch,reduction="none")[1]#decomposed loss
             with torch.no_grad():
                 gen_tr=model.generate(y_tr_torch)
-
-                classprob_pred_tr=classifier.classify(gen_tr,return_probs=True)
-                classprob_pred_tr=[el.detach().cpu().numpy() for el in classprob_pred_tr]
+                y_pred_tr=classifier.regress(gen_tr).detach().cpu().numpy()
 
                 gen_te=model.generate(y_te_torch)
-                classprob_pred_te=classifier.classify(gen_te,return_probs=True)
-                classprob_pred_te=[el.detach().cpu().numpy() for el in classprob_pred_te]
+                y_pred_te=classifier.regress(gen_te).detach().cpu().numpy()
 
                 gen_tr=gen_tr.detach().cpu().numpy()
                 gen_te=gen_te.detach().cpu().numpy()
-            classprobs_pred_tr.append(classprob_pred_tr)
-            classprobs_pred_te.append(classprob_pred_te)
+            ys_pred_tr.append(y_pred_tr)
+            ys_pred_te.append(y_pred_te)
             gens_tr.append(gen_tr)
             gens_te.append(gen_te)
     else:
@@ -114,19 +106,18 @@ if __name__ == "__main__":
             gen_tr=torch.tensor(generation["gen_tr"]).to(dtype=torch.float32,device=device)
             gen_te=torch.tensor(generation["gen_te"]).to(dtype=torch.float32,device=device)
             with torch.no_grad():
-                classprob_pred_tr=classifier.classify(gen_tr,return_probs=True)
-                classprob_pred_tr=[el.detach().cpu().numpy() for el in classprob_pred_tr]
-                classprob_pred_te=classifier.classify(gen_te,return_probs=True)
-                classprob_pred_te=[el.detach().cpu().numpy() for el in classprob_pred_te]
+                y_pred_tr=classifier.regress(gen_tr).detach().cpu().numpy()
+                y_pred_te=classifier.regress(gen_te).detach().cpu().numpy()
                 gen_tr=gen_tr.detach().cpu().numpy()
                 gen_te=gen_te.detach().cpu().numpy()
-            classprobs_pred_tr.append(classprob_pred_tr)
-            classprobs_pred_te.append(classprob_pred_te)
+            ys_pred_tr.append(y_pred_tr)
+            ys_pred_te.append(y_pred_te)
             gens_tr.append(gen_tr)
             gens_te.append(gen_te)
     gens_tr=np.stack(gens_tr,axis=0)
     gens_te=np.stack(gens_te,axis=0)
 
+    """
     rightprobss_tr=[]
     rightprobss_te=[]
     rights_tr=[]
@@ -155,6 +146,7 @@ if __name__ == "__main__":
     rights_tr=np.stack(rights_tr,axis=0)
     rightprobss_te=np.stack(rightprobss_te,axis=0)
     rights_te=np.stack(rights_te,axis=0)
+    """
 
     plot_data={}
     plot_data["min_vlb"]=logs.get("min_vlb",0)
@@ -163,13 +155,11 @@ if __name__ == "__main__":
     plot_data["val_losses"]=logs["val_losses"]
     plot_data["te_losses"]=logs["te_losses"]
     plot_data["l_tr"]=l_tr
-    plot_data["rights_tr"]=rights_tr
     plot_data["l_te"]=l_te
-    plot_data["rights_te"]=rights_te
-    plot_data["classprobs_pred_tr"]=classprobs_pred_tr
-    plot_data["classprobs_pred_te"]=classprobs_pred_te
-    plot_data["rightprobss_tr"]=rightprobss_tr
-    plot_data["rightprobss_te"]=rightprobss_te
+    plot_data["ys_pred_tr"]=ys_pred_tr
+    plot_data["ys_pred_te"]=ys_pred_te
+    #plot_data["rightprobss_tr"]=rightprobss_tr
+    #plot_data["rightprobss_te"]=rightprobss_te
     torch.save(plot_data,plot_data_path)
 
 

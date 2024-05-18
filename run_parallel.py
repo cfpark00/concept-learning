@@ -5,7 +5,7 @@ import glob
 import argparse
 import os
 
-def run_yaml(yaml_path):
+def run(yaml_path):
     """Function to execute a script using subprocess."""
     try:
         # Ensure your script has the appropriate executable permissions
@@ -25,11 +25,31 @@ def run_analysis(yaml_path):
         error_message=e.stderr.decode()
         print(f"Error running {yaml_path}: {error_message}:")
 
+def run_analysis_regress(yaml_path):
+    """Function to execute a script using subprocess."""
+    try:
+        # Ensure your script has the appropriate executable permissions
+        result = subprocess.run(['python3', 'run_analysis_regress.py', yaml_path], check=True, text=True, capture_output=True)
+        print(f"{yaml_path} ran successfully:")
+    except subprocess.CalledProcessError as e:
+        error_message=e.stderr.decode()
+        print(f"Error running {yaml_path}: {error_message}:")
+
+def calc_mse_pix(yaml_path):
+    """Function to execute a script using subprocess."""
+    try:
+        # Ensure your script has the appropriate executable permissions
+        result = subprocess.run(['python3', 'calc_mse_pix.py', yaml_path], check=True, text=True, capture_output=True)
+        print(f"{yaml_path} ran successfully:")
+    except subprocess.CalledProcessError as e:
+        error_message=e.stderr.decode()
+        print(f"Error running {yaml_path}: {error_message}:")
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run multiple scripts in parallel")
     parser.add_argument("folfile", type=str, help="Folder/File containing the yamls")
     parser.add_argument("--n-par", type=int, default=0, help="Number of parallel processes")
-    parser.add_argument("--analysis", action="store_true", help="Run analysis")
+    parser.add_argument("--exname", type=str,default="run", help="exname.py will be ran, default is \"run\" ")
     args=parser.parse_args()
     return args
 
@@ -49,12 +69,17 @@ if __name__ == "__main__":
     else:
         n_par=len(yaml_paths)
     print("Running:",yaml_paths)
-
     # Use ThreadPoolExecutor to run scripts in parallel
     with ThreadPoolExecutor(max_workers=n_par) as executor:
         # Map each script to the executor
-        if args.analysis:
+        if args.exname=="run":
+            results = executor.map(run, yaml_paths)
+        elif args.exname=="run_analysis":
             results = executor.map(run_analysis, yaml_paths)
+        elif args.exname=="run_analysis_regress":
+            results = executor.map(run_analysis_regress, yaml_paths)
+        elif args.exname=="calc_mse_pix":
+            results = executor.map(calc_mse_pix, yaml_paths)
         else:
-            results = executor.map(run_yaml, yaml_paths)
+            raise ValueError("exname not recognized")
     print("Done")
