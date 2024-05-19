@@ -2,8 +2,11 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import math
+from fancy_einsum import einsum
 
 from mltools.networks.network_tools import get_conv, zero_init
+
+cos = F.cosine_similarity
 
 
 class AttnBlock(nn.Module):
@@ -78,7 +81,7 @@ class ResNetBlock(nn.Module):
         conditioning_dims=None,
         dropout_prob=0.0,
         nca_params={},
-        cond_proj_type="zerolinear"
+        cond_proj_type="zerolinear",
     ):
         super().__init__()
         self.ch_in = ch_in
@@ -127,7 +130,19 @@ class ResNetBlock(nn.Module):
             )
 
     def forward(self, x, conditionings=None):
-        h = self.net1(x)
+        hidden = self.net1(x)
+        tmp = []
+
+        blue_input = torch.zeros(conditionings[1].shape[1]).to(
+            self.cond_projs[1][0].weight.device
+        )
+        blue_input[4] = 0.1
+        blue_input[4] = 0.1
+        blue_input[6] = 0.95
+        blue_vec = self.cond_projs[1](blue_input)
+
+        blue_vec_normed = blue_vec / torch.sqrt((blue_vec**2).sum())
+
         if conditionings is not None:
             assert len(conditionings) == len(self.conditioning_dims)
             assert all(
@@ -137,15 +152,39 @@ class ResNetBlock(nn.Module):
                 ]
             )
             for i, conditioning in enumerate(conditionings):
+
+                # conditioning: [16, 11]
+                # conditioning_: [16, 64]
                 conditioning_ = self.cond_projs[i](conditioning)
+                if i == 1:
+                    blue_comp = einsum(
+                        "batch dim, dim -> batch", conditioning_, blue_vec_normed
+                    )
+
+                    blue_comps = einsum(
+                        "batch, batch dim -> batch dim",
+                        blue_comp,
+                        blue_vec_normed.unsqueeze(0).repeat(
+                            (conditioning_.shape[0], 1)
+                        ),
+                    )
+
+                    hidden = hidden + blue_comps[:, :, None, None]
+
                 if self.dim == 2:
-                    h = h + conditioning_[:, :, None, None]
+                    hidden = hidden + conditioning_[:, :, None, None]
                 elif self.dim == 3:
-                    h = h + conditioning_[:, :, None, None, None]
-        h = self.net2(h)
+                    hidden = hidden + conditioning_[:, :, None, None, None]
+
+                if i == 1:
+                    tmp.append(conditioning_)
+
+        # conditioning_: [16, 64]
+        # hidden: [16, 64, 32, 32]
+        hidden = self.net2(hidden)
         if x.shape[1] != self.ch_out:
             x = self.skip_conv(x)
-        return x + h
+        return x + hidden
 
 
 class ResNetDown(nn.Module):
@@ -205,8 +244,9 @@ class ResNetUp(nn.Module):
             x = torch.cat([x, x_skip], dim=1)
         return x
 
+
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch 2.0 doesn't support simply bias=False """
+    """LayerNorm but with an optional bias. PyTorch 2.0 doesn't support simply bias=False"""
 
     def __init__(self, ndim, bias=True):
         super().__init__()
@@ -216,12 +256,13 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+
 class SelfAttentionBlock(nn.Module):
 
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        self.causal= config.causal
+        self.causal = config.causal
         # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         # output projection
@@ -234,48 +275,74 @@ class SelfAttentionBlock(nn.Module):
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         if config.flash:
-            assert hasattr(torch.nn.functional, 'scaled_dot_product_attention'), "PyTorch >= 2.0 is required for Flash Attention"
+            assert hasattr(
+                torch.nn.functional, "scaled_dot_product_attention"
+            ), "PyTorch >= 2.0 is required for Flash Attention"
             self.flash = True
         else:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            print(
+                "WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0"
+            )
             # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
+            self.register_buffer(
+                "bias",
+                torch.tril(torch.ones(config.block_size, config.block_size)).view(
+                    1, 1, config.block_size, config.block_size
+                ),
+            )
             self.flash = False
 
     def forward(self, x):
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = (
+            x.size()
+        )  # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(
+            1, 2
+        )  # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(
+            1, 2
+        )  # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(
+            1, 2
+        )  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=self.causal)
+            y = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                dropout_p=self.dropout if self.training else 0,
+                is_causal=self.causal,
+            )
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+            y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = (
+            y.transpose(1, 2).contiguous().view(B, T, C)
+        )  # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
-    
+
+
 class MLPBlock(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.gelu = nn.GELU()
+        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -284,6 +351,7 @@ class MLPBlock(nn.Module):
         x = self.c_proj(x)
         x = self.dropout(x)
         return x
+
 
 class TransformerBlock(nn.Module):
 
