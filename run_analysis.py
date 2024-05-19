@@ -28,15 +28,16 @@ def get_yaml_path():
 
 if __name__ == "__main__":
 
-    regen=False
+    regen=True
+
+    suffix="_w_cfg_0.0"
+    w_cfg=0.0
+    classifier_ckpt_path="./data/images_1/2x2_final2/classifier_combined.pth"
+    n_classes=[2,2]
 
     #suffix=""
-    #classifier_ckpt_path="./data/images_1/2x2_final2/classifier_combined.pth"
-    #n_classes=[2,2]
-
-    suffix=""
-    classifier_ckpt_path="./data/images_1/2x2x2_final/classifier_combined.pth"
-    n_classes=[2,2,2]
+    #classifier_ckpt_path="./data/images_1/2x2x2_final/classifier_combined.pth"
+    #n_classes=[2,2,2]
 
     ####
     device=cuda_tools.get_freer_device(verbose=False)
@@ -69,6 +70,8 @@ if __name__ == "__main__":
 
     if regen:
         model=utils.get_model(config)
+        if w_cfg is not None:
+            model.model.w_cfg=w_cfg
         ckpt_paths=logs["ckpt_paths"]
     
         for ckpt_path in tqdm.tqdm(ckpt_paths):
@@ -79,6 +82,7 @@ if __name__ == "__main__":
             ckpts.append(ckpt)
             model.load_state_dict(ckpt)
             model=model.to(device)
+            model.eval()
             x_tr_torch=torch.tensor(x_tr).to(device=device,dtype=torch.float32)
             y_tr_torch=torch.tensor(y_tr).to(device=device,dtype=torch.float32)
             x_te_torch=torch.tensor(x_te).to(device=device,dtype=torch.float32)
@@ -126,6 +130,9 @@ if __name__ == "__main__":
             gens_te.append(gen_te)
     gens_tr=np.stack(gens_tr,axis=0)
     gens_te=np.stack(gens_te,axis=0)
+    if suffix!="":
+        gens_path=os.path.join(fol,"gens"+suffix+".pth")
+        torch.save({"gens_tr":gens_tr,"gens_te":gens_te},gens_path)
 
     rightprobss_tr=[]
     rightprobss_te=[]

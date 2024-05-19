@@ -30,13 +30,24 @@ device=cuda_tools.get_freer_device()
 ####
 #setting 2
 
-save_path="/n/home12/cfpark00/ML/ToyCompDiff/data/celeba/run2_classifier"
+#save_path="/n/home12/cfpark00/ML/ToyCompDiff/data/celeba/run2_classifier"
+#test=False
+
+#cnn_ckpt_path="./data/celeba/run1_classifier/ckpts/ckpt_10000.pth"
+
+#attr1_name="Male"
+#attr2_name="Smiling"
+
+####
+#setting 3
+
+save_path="/n/home12/cfpark00/ML/ToyCompDiff/data/celeba/mh_classifier"
 test=False
 
 cnn_ckpt_path="./data/celeba/run1_classifier/ckpts/ckpt_10000.pth"
 
 attr1_name="Male"
-attr2_name="Smiling"
+attr2_name="Wearing_Hat"
 
 #####
 if os.path.exists(save_path):

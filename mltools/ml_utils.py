@@ -44,6 +44,7 @@ def train(model,dl_tr,batch_to_kwargs,n_steps,callback_steps,callbacks,device,**
             if step in callback_steps:
                 time_tr+=time.perf_counter()-timer
                 timer=time.perf_counter()
+                model.eval()
                 for callback in callbacks:
                     callback(step=step,model=model)
                 model.train()
