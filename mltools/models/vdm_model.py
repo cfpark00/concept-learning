@@ -227,7 +227,7 @@ class VDM(nn.Module):
             #print("masking out",mask.float().mean(),"of conditioning" )
             v_conditionings=kwargs["v_conditionings"]
             for v in v_conditionings:
-                v[mask,:]=0.
+                v[mask,:]=-1.
             kwargs["v_conditionings"]=v_conditionings
         bpd_factor = 1 / (np.prod(x.shape[1:]) * np.log(2))
         # Sample from q(x_t | x_0) with random t.
@@ -239,9 +239,9 @@ class VDM(nn.Module):
             noise = torch.randn_like(x)
         x_t, gamma_t = self.variance_preserving_map(x=x, times=times, noise=noise)
         # Predict noise added
-        pred_noise = self.score_model(
-            x_t,
-            t=(gamma_t.squeeze() - self.gamma_min) / (self.gamma_max - self.gamma_min),
+        pred_noise = self.get_pred_noise(
+            zt=x_t,
+            gamma_t=gamma_t.squeeze(),
             **kwargs
         )
 
@@ -305,6 +305,44 @@ class VDM(nn.Module):
         """
         return torch.sqrt(torch.sigmoid(gamma_t))
 
+    def get_pred_noise(self,zt, gamma_t, **kwargs):
+        """Get predicted noise
+
+        Args:
+            z (Tensor): latent variable
+            t (Tensor): time
+
+        Returns:
+            Tensor: predicted noise
+        """
+        if self.w_cfg is None or self.training:
+            #print(kwargs["v_conditionings"])
+            return self.score_model(
+                zt,
+                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
+                **kwargs
+            )
+        else:
+            #print(kwargs["v_conditionings"])
+            assert "v_conditionings" in kwargs, "Need v_conditionings to mask out"
+            v_conditionings=kwargs["v_conditionings"]
+            v_conditionings_uncond=[v.clone() for v in v_conditionings]
+            for v in v_conditionings_uncond:
+                v[:]=-1.
+            kwargs["v_conditionings"]=v_conditionings_uncond
+            pred_noise_uncond = self.score_model(
+                zt,
+                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
+                **kwargs
+            )
+            kwargs["v_conditionings"]=v_conditionings
+            pred_noise_cond=self.score_model(
+                zt,
+                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
+                **kwargs
+            )
+            return pred_noise_uncond+self.w_cfg*(pred_noise_cond-pred_noise_uncond)
+
     def sample_zs_given_zt(
         self,
         zt: Tensor,
@@ -331,32 +369,11 @@ class VDM(nn.Module):
         alpha_s = self.alpha(gamma_s)
         sigma_t = self.sigma(gamma_t)
         sigma_s = self.sigma(gamma_s)
-        if self.w_cfg is None:
-            pred_noise = self.score_model(
-                zt,
-                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
-                **kwargs
-            )
-        else:
-            assert "v_conditionings" in kwargs, "Need v_conditionings to mask out"
-            v_conditionings=kwargs["v_conditionings"]
-            v_conditionings_orig=[v.clone() for v in v_conditionings]
-            for v in v_conditionings:
-                v[:]=0.
-            kwargs["v_conditionings"]=v_conditionings
-            pred_noise_uncond = self.score_model(
-                zt,
-                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
-                **kwargs
-            )
-            kwargs["v_conditionings"]=v_conditionings_orig
-            pred_noise_cond=self.score_model(
-                zt,
-                t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
-                **kwargs
-            )
-            pred_noise=pred_noise_uncond+self.w_cfg*(pred_noise_cond-pred_noise_uncond)
-            #print("Used w_cfg",self.w_cfg)
+        pred_noise = self.get_pred_noise(
+            zt=zt,
+            gamma_t=gamma_t,
+            **kwargs
+        )
         if not return_ddnm:
             mean = alpha_s / alpha_t * (zt - c * sigma_t * pred_noise)
             scale = sigma_s * torch.sqrt(c)
