@@ -2,6 +2,7 @@ import torch
 import tqdm
 import numpy as np
 import time
+import random
 
 def to_np(ten):
     return ten.detach().cpu().numpy()
@@ -13,6 +14,7 @@ def seed_all(seed):
     torch.backends.cudnn.deterministic=True
     torch.backends.cudnn.benchmark=False
     np.random.seed(seed)
+    random.seed(seed)
 
 def train(model,dl_tr,batch_to_kwargs,n_steps,callback_steps,callbacks,device,**kwargs):
     clip_grad_norm=kwargs.get("clip_grad_norm",0.01)

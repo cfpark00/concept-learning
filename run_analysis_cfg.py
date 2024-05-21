@@ -28,10 +28,10 @@ def get_yaml_path():
 
 if __name__ == "__main__":
 
-    regen=False
+    regen=True
 
-    suffix=""
-    w_cfg=None
+    suffix="_w_cfg_0.5"
+    w_cfg=0.5
     classifier_ckpt_path="./data/images_1/2x2_final2/classifier_combined.pth"
     n_classes=[2,2]
 
