@@ -129,19 +129,38 @@ class ResNetBlock(nn.Module):
                 ch_in, ch_out, dim=self.dim, kernel_size=1, padding=0
             )
 
-    def forward(self, x, conditionings=None):
+    def forward(self, x, conditionings=None, hack=False):
         hidden = self.net1(x)
-        tmp = []
 
-        blue_input = torch.zeros(conditionings[1].shape[1]).to(
-            self.cond_projs[1][0].weight.device
-        )
-        blue_input[4] = 0.1
-        blue_input[4] = 0.1
-        blue_input[6] = 0.95
-        blue_vec = self.cond_projs[1](blue_input)
+        if hack:
+            color_input = torch.zeros(conditionings[1].shape[1]).to(
+                self.cond_projs[1][0].weight.device
+            )
+            color_input[4] = 0.05
+            color_input[5] = 0.05
+            color_input[6] = 0.95
+            # color_input[4] = 0.2
+            # color_input[5] = 0.2
+            # color_input[6] = 0.8
+            blue_vec = self.cond_projs[1](color_input)
+            blue_vec_normed = blue_vec / torch.sqrt((blue_vec**2).sum())
 
-        blue_vec_normed = blue_vec / torch.sqrt((blue_vec**2).sum())
+            color_input[4] = 0.6
+            color_input[5] = 0.4
+            color_input[6] = 0.4
+            red_vec = self.cond_projs[1](color_input)
+            red_vec_normed = red_vec / torch.sqrt((red_vec**2).sum())
+
+            size_input = torch.zeros(conditionings[1].shape[1]).to(
+                self.cond_projs[1][0].weight.device
+            )
+            size_input[7] = 0.3
+            small_vec = self.cond_projs[1](size_input)
+            small_vec_normed = small_vec / torch.sqrt((small_vec**2).sum())
+
+            size_input[7] = 0.6
+            large_vec = self.cond_projs[1](size_input)
+            large_vec_normed = large_vec / torch.sqrt((large_vec**2).sum())
 
         if conditionings is not None:
             assert len(conditionings) == len(self.conditioning_dims)
@@ -156,7 +175,7 @@ class ResNetBlock(nn.Module):
                 # conditioning: [16, 11]
                 # conditioning_: [16, 64]
                 conditioning_ = self.cond_projs[i](conditioning)
-                if i == 1:
+                if hack and i == 1:
                     blue_comp = einsum(
                         "batch dim, dim -> batch", conditioning_, blue_vec_normed
                     )
@@ -168,16 +187,50 @@ class ResNetBlock(nn.Module):
                             (conditioning_.shape[0], 1)
                         ),
                     )
+                    large_comp = einsum(
+                        "batch dim, dim -> batch", blue_comps, large_vec_normed
+                    )
+                    large_comps = einsum(
+                        "batch, batch dim -> batch dim",
+                        large_comp,
+                        large_vec_normed.unsqueeze(0).repeat(
+                            (conditioning_.shape[0], 1)
+                        ),
+                    )
 
-                    hidden = hidden + blue_comps[:, :, None, None]
+                    curr = blue_comps - large_comps
 
-                if self.dim == 2:
-                    hidden = hidden + conditioning_[:, :, None, None]
-                elif self.dim == 3:
-                    hidden = hidden + conditioning_[:, :, None, None, None]
+                    #small_comp_scales = einsum(
+                    #    "batch dim, dim -> batch", curr, small_vec_normed
+                    #)
+                    #small_comps = einsum(
+                    #    "batch, batch dim -> batch dim",
+                    #    small_comp_scales,
+                    #    small_vec_normed.unsqueeze(0).repeat(
+                    #        (conditioning_.shape[0], 1)
+                    #    ),
+                    #)
 
-                if i == 1:
-                    tmp.append(conditioning_)
+                    red_comp_scales = einsum(
+                        "batch dim, dim -> batch", conditioning_, red_vec_normed
+                    )
+                    red_comps = einsum(
+                        "batch, batch dim -> batch dim",
+                        red_comp_scales,
+                        red_vec_normed.unsqueeze(0).repeat((conditioning_.shape[0], 1)),
+                    )
+                    without_red = conditioning_ - red_comps
+                    hidden = (
+                        hidden
+                        + conditioning_[:, :, None, None]
+                        + (hack * curr[:, :, None, None])
+                    )
+
+                else:
+                    if self.dim == 2:
+                        hidden = hidden + conditioning_[:, :, None, None]
+                    elif self.dim == 3:
+                        hidden = hidden + conditioning_[:, :, None, None, None]
 
         # conditioning_: [16, 64]
         # hidden: [16, 64, 32, 32]
@@ -202,9 +255,9 @@ class ResNetDown(nn.Module):
             padding=0,
         )
 
-    def forward(self, x, conditionings, no_down=False):
+    def forward(self, x, conditionings, no_down=False, hack=False):
         for i, resnet_block in enumerate(self.resnet_blocks):
-            x = resnet_block(x, conditionings)
+            x = resnet_block(x, conditionings, hack=hack)
             if self.attention_blocks is not None:
                 x = self.attention_blocks[i](x)
         if no_down:
@@ -233,9 +286,9 @@ class ResNetUp(nn.Module):
             transposed=True,
         )
 
-    def forward(self, x, x_skip=None, conditionings=None, no_up=False):
+    def forward(self, x, x_skip=None, conditionings=None, no_up=False, hack=False):
         for i, resnet_block in enumerate(self.resnet_blocks):
-            x = resnet_block(x, conditionings)
+            x = resnet_block(x, conditionings, hack=hack)
             if self.attention_blocks is not None:
                 x = self.attention_blocks[i](x)
         if not no_up:
