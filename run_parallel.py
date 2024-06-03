@@ -35,16 +35,6 @@ def run_analysis_cfg(yaml_path):
         error_message=e.stderr.decode()
         print(f"Error running {yaml_path}: {error_message}:")
 
-def run_analysis_cfg2(yaml_path):
-    """Function to execute a script using subprocess."""
-    try:
-        # Ensure your script has the appropriate executable permissions
-        result = subprocess.run(['python3', 'run_analysis_cfg2.py', yaml_path], check=True, text=True, capture_output=True)
-        print(f"{yaml_path} ran successfully:")
-    except subprocess.CalledProcessError as e:
-        error_message=e.stderr.decode()
-        print(f"Error running {yaml_path}: {error_message}:")
-
 def run_analysis_regress(yaml_path):
     """Function to execute a script using subprocess."""
     try:
@@ -98,7 +88,6 @@ if __name__ == "__main__":
             results = executor.map(run_analysis, yaml_paths)
         elif args.exname=="run_analysis_cfg":
             results = executor.map(run_analysis_cfg, yaml_paths)
-        elif args.exname=="run_analysis_cfg2":
             results = executor.map(run_analysis_cfg2, yaml_paths)
         elif args.exname=="run_analysis_regress":
             results = executor.map(run_analysis_regress, yaml_paths)
