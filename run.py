@@ -66,10 +66,14 @@ if __name__ == "__main__":
     generation_fol=os.path.join(experiment_directory,f"generations")
     os.makedirs(generation_fol)
 
+    unconditioned=config.get("unconditioned",False)
+
     def batch_to_kwargs(batch):
         x,c=batch
         x=x.to(device)
         c=c.to(device)
+        if unconditioned:
+            c[:]=0.
         return {"x":x,"c":c}
 
     save_steps=[]
@@ -101,8 +105,13 @@ if __name__ == "__main__":
         ckpt_paths.append(ckpt_path)
     def generate(step,model):
         model.eval()
-        gen_tr=model.generate(c=torch.tensor(y_tr_gen).float().to(device)).detach().cpu().numpy()
-        gen_te=model.generate(c=torch.tensor(y_te_gen).float().to(device)).detach().cpu().numpy()
+        c_tr=torch.tensor(y_tr_gen).float().to(device)
+        c_te=torch.tensor(y_te_gen).float().to(device)
+        if unconditioned:
+            c_tr[:]=0.
+            c_te[:]=0.
+        gen_tr=model.generate(c=c_tr).detach().cpu().numpy()
+        gen_te=model.generate(c=c_te).detach().cpu().numpy()
         gens={}
         gens["gen_tr"]=gen_tr
         gens["gen_te"]=gen_te

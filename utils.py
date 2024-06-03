@@ -245,6 +245,84 @@ def get_comp_classes_images_1(i_class,config):
         comp_classes[k]=comp_class
     return comp_classes
 
+def generate_images_vecss(**kwargs):
+    image_size=kwargs.get("image_size",32)
+    n_sample=kwargs.get("n_sample",128)
+    noise_level=kwargs.get("noise_level",0.001)
+    shape_name=kwargs.get("shape_name","circle")
+    x_means=kwargs.get("x_means",np.random.uniform(-1,1,n_sample))
+    y_means=kwargs.get("y_means",np.random.uniform(-1,1,n_sample))
+    colors=kwargs.get("colors",np.random.uniform(0,1,(n_sample,3)))
+    sizes=kwargs.get("sizes",np.random.uniform(0,1,n_sample))
+    bg_colors=kwargs.get("bg_colors",np.random.uniform(0,1,(n_sample,3)))
+    x_s_n=kwargs.get("x_s_n",0.0)
+    y_s_n=kwargs.get("y_s_n",0.0)
+    color_s_n=kwargs.get("color_s_n",0.0)
+    size_s_n=kwargs.get("size_s_n",0.0)
+    bg_color_s_n=kwargs.get("bg_color_s_n",0.0)
+    comp_classes=kwargs.get("comp_classes",{"color":0,"size":0})
+
+
+    arr=np.linspace(-1.,1.,image_size)
+    x_grid,y_grid=np.meshgrid(arr,arr,indexing="ij")
+    images=[]
+    vecss=[]
+    for i in range(n_sample):
+        image=np.zeros((image_size,image_size,3),dtype=np.float32)
+        x=x_means[i]
+        y=y_means[i]
+        color=colors[i]
+        size=sizes[i]
+        bg_color=bg_colors[i]
+
+        dx=x_grid-x
+        dy=y_grid-y
+        if shape_name=="circle":
+            r=np.sqrt(dx**2+dy**2)
+            mask=r<size
+        elif shape_name=="triangle":
+            triangle_side=np.sqrt(4*np.pi/np.sqrt(3))*size
+            incircle=triangle_side*(np.sqrt(3)/6)
+            a1,b1=2,(1-(np.sqrt(3)/6))*triangle_side
+            a2,b2=-2,(1-(np.sqrt(3)/6))*triangle_side
+            mask=(dy>(-incircle))*(dy<(a1*dx+b1))*(dy<(a2*dx+b2))
+        smoothmask=sim.gaussian_filter(mask.astype(np.float32),1.)
+        image+=smoothmask[:,:,None]*color[None,None,:]+(1-smoothmask[:,:,None])*bg_color[None,None,:]
+        noise=np.random.randn(image_size,image_size,3)*noise_level
+        image+=noise
+        image=np.clip(image,0,1).astype(np.float32)
+
+        vecs=[]
+        for key in ["shape","x","y","color","size","bg_color"]:
+            if key=="shape":
+                if shape_name=="circle":
+                    vec=np.array([1.,0.])
+                elif shape_name=="triangle":
+                    vec=np.array([0.,1.])
+            elif key=="x":
+                vec=x+np.random.randn(1)*x_s_n
+            elif key=="y":
+                vec=y+np.random.randn(1)*y_s_n
+            elif key=="color":
+                vec=color+np.random.randn(3)*color_s_n
+            elif key=="size":
+                vec=size+np.random.randn(1)*size_s_n
+            elif key=="bg_color":
+                vec=bg_color+np.random.randn(3)*bg_color_s_n
+            else:
+                raise NotImplementedError(f"Key {key} not implemented")
+
+            if key in comp_classes:
+                vecs.append(vec)
+            else:
+                vecs.append(np.zeros_like(vec))
+        vecs=np.concatenate(vecs,axis=0)
+            
+        images.append(image)
+        vecss.append(vecs)
+    images=np.stack(images,axis=0)
+    vecss=np.stack(vecss,axis=0)
+    return images,vecss
 
 def generate_images_1(i_class,n_sample,config,test=False):
     comp_classes=get_comp_classes_images_1(i_class,config)
