@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from torch.special import expm1
 from tqdm import trange
 from torch.distributions.normal import Normal
-from lightning.pytorch import LightningModule
 
 from mltools.models.model_tools import (
     kl_std_normal,
@@ -27,7 +26,7 @@ class VDM(nn.Module):
         antithetic_time_sampling: bool = True,
         data_noise: float = 1.0e-3,
         p_cfg=None,
-        w_cfg=None
+        w_cfg=None,
     ):
         """Variational diffusion model, continuous time implementation of arxiv:2107.00630.
 
@@ -204,11 +203,7 @@ class VDM(nn.Module):
         ).flatten(start_dim=1).sum(axis=-1)
 
     def get_loss(
-        self,
-        x: Tensor,
-        noise: Optional[Tensor] = None,
-        reduction="mean",
-        **kwargs
+        self, x: Tensor, noise: Optional[Tensor] = None, reduction="mean", **kwargs
     ) -> float:
         """Get loss for diffusion model. Eq. 11 in arxiv:2107.00630
 
@@ -222,13 +217,13 @@ class VDM(nn.Module):
         """
         if self.p_cfg is not None:
             assert "v_conditionings" in kwargs, "Need v_conditionings to mask out"
-            batch_size=x.shape[0]
-            mask=torch.rand(batch_size)<self.p_cfg
-            #print("masking out",mask.float().mean(),"of conditioning" )
-            v_conditionings=kwargs["v_conditionings"]
+            batch_size = x.shape[0]
+            mask = torch.rand(batch_size) < self.p_cfg
+            # print("masking out",mask.float().mean(),"of conditioning" )
+            v_conditionings = kwargs["v_conditionings"]
             for v in v_conditionings:
-                v[mask,:]=0.
-            kwargs["v_conditionings"]=v_conditionings
+                v[mask, :] = 0.0
+            kwargs["v_conditionings"] = v_conditionings
         bpd_factor = 1 / (np.prod(x.shape[1:]) * np.log(2))
         # Sample from q(x_t | x_0) with random t.
         times = self.sample_times(
@@ -242,7 +237,7 @@ class VDM(nn.Module):
         pred_noise = self.score_model(
             x_t,
             t=(gamma_t.squeeze() - self.gamma_min) / (self.gamma_max - self.gamma_min),
-            **kwargs
+            **kwargs,
         )
 
         # *** Diffusion loss
@@ -311,7 +306,10 @@ class VDM(nn.Module):
         t: Tensor,
         s: Tensor,
         return_ddnm=False,
-        **kwargs
+        alpha=False,
+        beta=1,
+        gamma=None,
+        **kwargs,
     ) -> Tensor:
         """Sample p(z_s|z_t, x) used for standard ancestral sampling. Eq. 34 in arxiv:2107.00630
 
@@ -335,28 +333,33 @@ class VDM(nn.Module):
             pred_noise = self.score_model(
                 zt,
                 t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
-                **kwargs
+                alpha=alpha,
+                beta=beta,
+                gamma=gamma,
+                **kwargs,
             )
         else:
             assert "v_conditionings" in kwargs, "Need v_conditionings to mask out"
-            v_conditionings=kwargs["v_conditionings"]
-            v_conditionings_orig=[v.clone() for v in v_conditionings]
+            v_conditionings = kwargs["v_conditionings"]
+            v_conditionings_orig = [v.clone() for v in v_conditionings]
             for v in v_conditionings:
-                v[:]=0.
-            kwargs["v_conditionings"]=v_conditionings
+                v[:] = 0.0
+            kwargs["v_conditionings"] = v_conditionings
             pred_noise_uncond = self.score_model(
                 zt,
                 t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
-                **kwargs
+                **kwargs,
             )
-            kwargs["v_conditionings"]=v_conditionings_orig
-            pred_noise_cond=self.score_model(
+            kwargs["v_conditionings"] = v_conditionings_orig
+            pred_noise_cond = self.score_model(
                 zt,
                 t=(gamma_t - self.gamma_min) / (self.gamma_max - self.gamma_min),
-                **kwargs
+                **kwargs,
             )
-            pred_noise=pred_noise_uncond+self.w_cfg*(pred_noise_cond-pred_noise_uncond)
-            #print("Used w_cfg",self.w_cfg)
+            pred_noise = pred_noise_uncond + self.w_cfg * (
+                pred_noise_cond - pred_noise_uncond
+            )
+            # print("Used w_cfg",self.w_cfg)
         if not return_ddnm:
             mean = alpha_s / alpha_t * (zt - c * sigma_t * pred_noise)
             scale = sigma_s * torch.sqrt(c)
@@ -383,7 +386,9 @@ class VDM(nn.Module):
         z: Optional[Tensor] = None,
         return_all=False,
         verbose=False,
-        **kwargs
+        alpha=False,
+        beta=1,
+        **kwargs,
     ) -> Tensor:
         """Generate new samples given some conditioning vector
 
@@ -415,182 +420,12 @@ class VDM(nn.Module):
             if verbose
             else range(n_sampling_steps)
         ):
+            # kwargs["v_conditionings"][0].shape: [4, 11]
             z = self.sample_zs_given_zt(
-                zt=z,
-                t=steps[i],
-                s=steps[i + 1],
-                **kwargs
+                zt=z, t=steps[i], s=steps[i + 1], alpha=alpha, beta=beta, **kwargs
             )
             if return_all:
                 zs.append(z)
         if return_all:
             return torch.stack(zs, dim=0)
         return z
-
-
-class LightVDM(LightningModule):
-    def __init__(
-        self,
-        score_model: nn.Module,
-        learning_rate: float = 3.0e-4,
-        weight_decay: float = 1.0e-5,
-        n_sampling_steps: int = 250,
-        gamma_min: float = -13.3,
-        gamma_max: float = 5.0,
-        draw_figure=None,
-        **kwargs,
-    ):
-        """Variational diffusion wrapper for lightning
-
-        Args:
-            score_model (nn.Module): model used to denoise
-            learning_rate (float, optional): initial learning rate. Defaults to 1.0e-4.
-            n_sampling_steps (int, optional): number of steps used to sample validations.
-            Defaults to 250.
-        """
-        super().__init__()
-        self.save_hyperparameters(ignore=["score_model", "draw_figure"])
-        self.model = VDM(
-            score_model=score_model,
-            gamma_min=gamma_min,
-            gamma_max=gamma_max,
-            **kwargs,
-        )
-        self.draw_figure = draw_figure
-
-    def forward(
-        self, x, **kwargs
-    ) -> Tensor:
-        """get loss for samples
-
-        Args:
-            x (Tensor): data samples
-            conditioning (Tensor): conditioning
-            conditioning_values (Tensor): conditioning_values
-
-        Returns:
-            Tensor: loss
-        """
-        return self.model.get_loss(
-            x=x, **kwargs
-        )
-
-    def evaluate(self, batch: Tuple, stage: str = None) -> Tensor:
-        """get loss function
-
-        Args:
-            batch (Tuple): batch of examples
-            stage (str, optional): training stage. Defaults to None.
-
-        Returns:
-            Tensor: loss function
-        """
-        x,conditioning,conditioning_values=self.batch_unpack(batch)
-        loss, metrics = self(
-            x=x,
-            s_conditioning=conditioning,
-            v_conditionings=conditioning_values,
-        )
-        if self.logger is not None:
-            self.logger.log_metrics(metrics)
-        return loss
-
-    def training_step(
-        self,
-        batch: Tuple,
-        batch_idx: int,
-    ) -> Tensor:
-        """Training
-
-        Args:
-            batch (Tuple): batch of examples
-            batch_idx (int): batch idx
-
-        Returns:
-            Tensor: loss
-        """
-        return self.evaluate(batch, "train")
-
-    def draw_samples(
-        self,
-        batch_size: int,
-        n_sampling_steps: int = 250,
-        verbose=False,
-        return_all=False,
-        **kwargs
-    ) -> Tensor:
-        """draw samples from model
-
-        Args:
-            batch_size (int): number of samples in batch
-            n_sampling_steps (int): number of sampling steps used to generate validation
-            samples
-
-        Returns:
-            Tensor: generated samples
-        """
-
-        return self.model.sample(
-            batch_size=batch_size,
-            n_sampling_steps=n_sampling_steps,
-            device=self.device,
-            verbose=verbose,
-            return_all=return_all,
-            **kwargs
-        )
-    def batch_unpack(self,batch):
-        x = batch["x"]
-        conditioning = batch["conditioning"]
-        conditioning_values = batch["conditioning_values"]
-        return x,conditioning,conditioning_values
-
-    def validation_step(self, batch: Tuple, batch_idx: int) -> Tensor:
-        """validate model
-
-        Args:
-            batch (Tuple): batch of examples
-            batch_idx (int): idx for batch
-
-        Returns:
-            Tensor: loss
-        """
-        # sample images during validation and upload to wandb
-        x,conditioning,conditioning_values=self.batch_unpack(batch)
-        loss = self.evaluate(batch, "val")
-        self.log_dict({"val_loss": loss})
-
-        if batch_idx == 0:
-            samples = self.draw_samples(
-                batch_size=len(x),
-                n_sampling_steps=self.hparams.n_sampling_steps,
-                s_conditioning=conditioning,
-                v_conditionings=conditioning_values,
-            )
-            batch_plot={"x":x,"conditioning":conditioning,"conditioning_values":conditioning_values}
-            if self.draw_figure is not None:
-                fig = self.draw_figure(batch_plot, samples)
-
-                if self.logger is not None:
-                    self.logger.experiment.log_figure(figure=fig)
-        return loss
-
-    def test_step(self, batch, batch_idx):
-        """test model
-
-        Args:
-            batch (Tuple): batch of examples
-            batch_idx (int): idx for batch
-
-        Returns:
-            Tensor: loss
-        """
-        return self.evaluate(batch, "test")
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.learning_rate,
-            weight_decay=self.hparams.weight_decay,
-        )
-        return optimizer
-

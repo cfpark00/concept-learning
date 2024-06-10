@@ -4,12 +4,21 @@ from torch.nn import functional as F
 import warnings
 import math
 import inspect
+from fancy_einsum import einsum
 
 from mltools.networks.network_tools import zero_init, get_conv, get_timestep_embedding
-from mltools.networks.blocks import AttnBlock, ResNetBlock, ResNetDown, ResNetUp, TransformerBlock, LayerNorm
+from mltools.networks.blocks import (
+    AttnBlock,
+    ResNetBlock,
+    ResNetDown,
+    ResNetUp,
+    TransformerBlock,
+    LayerNorm,
+)
 from mltools.models.configs import GPTConfig
 
-#CNNs
+
+# CNNs
 class CUNet(nn.Module):
     def __init__(
         self,
@@ -17,18 +26,14 @@ class CUNet(nn.Module):
         out_channels=None,
         chs=[48, 96, 192, 384],
         s_conditioning_channels: int = 0,
-
         v_conditioning_dims: list = [],
         v_conditioning_type="common_zerolinear",
         v_embedding_dim: int = 64,
         v_augment=False,
         v_embed_no_s_gelu=False,
-
         t_conditioning=False,
         t_embedding_dim=64,
-
         init_scale: float = 0.02,
-
         num_res_blocks: int = 1,
         norm_groups: int = 8,
         mid_attn=True,
@@ -49,15 +54,15 @@ class CUNet(nn.Module):
         self.s_conditioning_channels = s_conditioning_channels
         self.v_conditioning_dims = v_conditioning_dims
         self.v_conditioning_type = v_conditioning_type
-        self.common,self.cond_proj_type=v_conditioning_type.split("_")
-        self.common=(self.common=="common")
+        self.common, self.cond_proj_type = v_conditioning_type.split("_")
+        self.common = self.common == "common"
         self.v_embedding_dim = v_embedding_dim
         self.v_augment = v_augment
         if self.v_augment:
-            #print("augmenting v_conditioning")
+            # print("augmenting v_conditioning")
             assert self.common
         self.v_embed_no_s_gelu = v_embed_no_s_gelu
-        
+
         self.t_conditioning = t_conditioning
         self.t_embedding_dim = t_embedding_dim
         self.norm_groups = norm_groups
@@ -78,16 +83,25 @@ class CUNet(nn.Module):
                 nn.GELU(),
             )
             conditioning_dims.append(self.t_conditioning_dim)
+
         if len(self.v_conditioning_dims) > 0:
             self.embeds_v_conditionings = nn.ModuleList()
             for v_conditioning_dim in self.v_conditioning_dims:
                 if self.common:
-                    dim_mlp=2*self.v_embedding_dim if self.v_augment else self.v_embedding_dim
+                    dim_mlp = (
+                        2 * self.v_embedding_dim
+                        if self.v_augment
+                        else self.v_embedding_dim
+                    )
                     self.embeds_v_conditionings.append(
                         nn.Sequential(
                             nn.Linear(v_conditioning_dim, dim_mlp),
                             nn.GELU(),
-                            zero_init(nn.Linear(dim_mlp,dim_mlp)) if self.v_augment else nn.Linear(dim_mlp,dim_mlp),
+                            (
+                                zero_init(nn.Linear(dim_mlp, dim_mlp))
+                                if self.v_augment
+                                else nn.Linear(dim_mlp, dim_mlp)
+                            ),
                             nn.GELU() if not self.v_embed_no_s_gelu else nn.Identity(),
                         )
                     )
@@ -197,13 +211,27 @@ class CUNet(nn.Module):
         )
 
         if self.in_channels != self.out_channels:
-            self.conv_residual_out= get_conv(in_channels=self.in_channels, out_channels=self.out_channels,
-                                             dim=self.dim, init=zero_init, **conv_params)
+            self.conv_residual_out = get_conv(
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                dim=self.dim,
+                init=zero_init,
+                **conv_params,
+            )
 
         for n, p in self.named_parameters():
-            p.data*=init_scale
+            p.data *= init_scale
 
-    def forward(self, x, t=None, s_conditioning=None, v_conditionings=None):
+    def forward(
+        self,
+        x,
+        t=None,
+        s_conditioning=None,
+        v_conditionings=None,
+        alpha=False,
+        beta=1,
+        gamma=None,
+    ):
         if s_conditioning is not None:
             if self.s_conditioning_channels != s_conditioning.shape[1]:
                 raise ValueError(
@@ -237,16 +265,41 @@ class CUNet(nn.Module):
                 raise ValueError(
                     f"Expected {len(self.v_conditioning_dims)} v_conditionings, but got {len(v_conditionings)}"
                 )
+
             for i, v_conditioning in enumerate(v_conditionings):
+                # v_conditioning: [64, 11]
                 if v_conditioning.shape[1] != self.v_conditioning_dims[i]:
                     raise ValueError(
                         f"Expected v_conditioning to have {self.v_conditioning_dims[i]} channels, but got {v_conditioning.shape[1]}"
                     )
+
                 v_cond = self.embeds_v_conditionings[i](v_conditioning)
                 if self.v_augment:
-                    means=v_cond[:,::2]
-                    stds=torch.exp(v_cond[:,1::2])
-                    v_cond=means+stds*torch.randn_like(stds)
+                    means = v_cond[:, ::2]
+                    stds = torch.exp(v_cond[:, 1::2])
+                    v_cond = means + stds * torch.randn_like(stds)
+
+                # v_cond: [64, 64]
+                if gamma is not None:
+                    blue_cond = torch.zeros((11))
+                    blue_cond[4] = 0.1
+                    blue_cond[5] = 0.1
+                    blue_cond[6] = 0.9
+                    blue_cond = blue_cond.unsqueeze(0)
+
+                    blue_vec = self.embeds_v_conditionings[i](blue_cond.to(v_cond.device)).squeeze()
+                    blue_vec = blue_vec / torch.sqrt((blue_vec**2).sum())
+
+                    blue_scales = einsum(
+                        "batch dim, dim -> batch", v_cond, blue_vec
+                    )
+                    blue_comps = einsum(
+                        "batch, batch dim -> batch dim",
+                        blue_scales, blue_vec.unsqueeze(0).repeat((v_cond.shape[0], 1))
+                    )
+
+                    v_cond = v_cond + (gamma * blue_comps)
+
                 conditionings.append(v_cond)
 
         if len(conditionings) == 0:
@@ -258,8 +311,14 @@ class CUNet(nn.Module):
         # print(h.shape)
         skips = []
         for i, down in enumerate(self.downs):
+            # conditionings[0]: t_emb
+            # conditionings[1]: c_emb, [4, 11]
             h, h_skip = down(
-                h, conditionings=conditionings, no_down=(i == (len(self.downs) - 1))
+                h,
+                conditionings=conditionings,
+                no_down=(i == (len(self.downs) - 1)),
+                alpha=alpha,
+                beta=beta,
             )
             # print(i,h.shape)
             if h_skip is not None:
@@ -267,12 +326,12 @@ class CUNet(nn.Module):
         # print("total skips:",len(skips),[skip.shape for skip in skips])
 
         # middle
-        h = self.mid1(h, conditionings=conditionings)
+        h = self.mid1(h, conditionings=conditionings, alpha=alpha, beta=beta)
         # print("m1",h.shape)
         if self.mid_attn:
             h = self.mid_attn1(h)
             # print("ma1",h.shape)
-        h = self.mid2(h, conditionings=conditionings)
+        h = self.mid2(h, conditionings=conditionings, alpha=alpha, beta=beta)
         # print("m2",h.shape)
 
         # upsampling
@@ -283,6 +342,8 @@ class CUNet(nn.Module):
                 x_skip=x_skip,
                 conditionings=conditionings,
                 no_up=(i == self.n_sizes - 1),
+                alpha=alpha,
+                beta=beta,
             )
             # print(i,h.shape)
         h = self.norm_out(h)
@@ -292,7 +353,8 @@ class CUNet(nn.Module):
             x = self.conv_residual_out(x)
         return h + x
 
-#MLPs
+
+# MLPs
 class CMLP(nn.Module):
     def __init__(
         self,
@@ -305,14 +367,14 @@ class CMLP(nn.Module):
         act="gelu",
     ):
         super().__init__()
-        self.in_dim=in_dim
+        self.in_dim = in_dim
         self.h_dims = h_dims
-        self.shape=(in_dim,)
+        self.shape = (in_dim,)
         if out_dim is None:
             self.out_dim = self.in_dim
         else:
             self.out_dim = out_dim
-        self.dims=[self.in_dim]+self.h_dims+[self.out_dim]
+        self.dims = [self.in_dim] + self.h_dims + [self.out_dim]
         self.v_conditioning_dims = v_conditioning_dims
         self.t_conditioning = t_conditioning
         self.t_embedding_dim = t_embedding_dim
@@ -323,7 +385,7 @@ class CMLP(nn.Module):
             self.embed_t_conditioning = nn.Sequential(
                 nn.Linear(self.t_embedding_dim, self.t_conditioning_dim),
                 nn.GELU(),
-                nn.Linear(self.t_conditioning_dim, self.t_conditioning_dim)
+                nn.Linear(self.t_conditioning_dim, self.t_conditioning_dim),
             )
             conditioning_dims.append(self.t_conditioning_dim)
         if len(self.v_conditioning_dims) > 0:
@@ -341,20 +403,20 @@ class CMLP(nn.Module):
 
         self.embedders = nn.ModuleList()
         self.layers = nn.ModuleList()
-        for i,(dim_in,dim_out) in enumerate(zip(self.dims[:-1],self.dims[1:])):
-            if i!=len(self.dims)-2:#skip last layers
-                embedders=nn.ModuleList()
+        for i, (dim_in, dim_out) in enumerate(zip(self.dims[:-1], self.dims[1:])):
+            if i != len(self.dims) - 2:  # skip last layers
+                embedders = nn.ModuleList()
                 for conditioning_dim in self.conditioning_dims:
-                    embedder=nn.Sequential(
+                    embedder = nn.Sequential(
                         nn.Linear(conditioning_dim, dim_out),
                         nn.GELU(),
-                        nn.Linear(dim_out,dim_out),
-                        nn.GELU()
+                        nn.Linear(dim_out, dim_out),
+                        nn.GELU(),
                     )
                     embedders.append(embedder)
                 self.embedders.append(embedders)
             self.layers.append(nn.Linear(dim_in, dim_out))
-        
+
     def forward(self, x, t=None, v_conditionings=None):
 
         conditionings = []
@@ -390,21 +452,24 @@ class CMLP(nn.Module):
             for v_conditioning in v_conditionings:
                 assert v_conditioning.shape[0] == x.shape[0], "batch not matching"
                 conditionings.append(v_conditioning)
-        assert len(conditionings) == len(self.embedders[0]),"Number of conditionings must match number of embedders"
+        assert len(conditionings) == len(
+            self.embedders[0]
+        ), "Number of conditionings must match number of embedders"
 
         h = x
-        for i,layer in enumerate(self.layers):
-            h=layer(h)
-            if i<(len(self.layers)-1):
-                embedders=self.embedders[i]
-                for embedder,conditioning in zip(embedders,conditionings):
-                    h=h+embedder(conditioning)
-                h=self.act(h)
-        return h+x
+        for i, layer in enumerate(self.layers):
+            h = layer(h)
+            if i < (len(self.layers) - 1):
+                embedders = self.embedders[i]
+                for embedder, conditioning in zip(embedders, conditionings):
+                    h = h + embedder(conditioning)
+                h = self.act(h)
+        return h + x
+
 
 ###Transformers
 class Transformer(nn.Module):
-    def __init__(self, config,embedder=None,unembedder=None):
+    def __init__(self, config, embedder=None, unembedder=None):
         super().__init__()
         assert config.in_size is not None
         assert config.block_size is not None
@@ -414,66 +479,93 @@ class Transformer(nn.Module):
             print("Not using pos embed")
 
         if embedder is None:
-            self.embedder=None
-            self.transformer = nn.ModuleDict(dict(
-                wte = (
-                    nn.Embedding(config.in_size, config.n_embd) if config.tokenized
-                    else nn.Linear(config.in_size, config.n_embd)
-                ),
-                wpe = nn.Embedding(config.block_size, config.n_embd) if config.pos_embed else None,
-                drop = nn.Dropout(config.dropout),
-                h = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layer)]),
-                ln_f = LayerNorm(config.n_embd, bias=config.bias),
-            ))
+            self.embedder = None
+            self.transformer = nn.ModuleDict(
+                dict(
+                    wte=(
+                        nn.Embedding(config.in_size, config.n_embd)
+                        if config.tokenized
+                        else nn.Linear(config.in_size, config.n_embd)
+                    ),
+                    wpe=(
+                        nn.Embedding(config.block_size, config.n_embd)
+                        if config.pos_embed
+                        else None
+                    ),
+                    drop=nn.Dropout(config.dropout),
+                    h=nn.ModuleList(
+                        [TransformerBlock(config) for _ in range(config.n_layer)]
+                    ),
+                    ln_f=LayerNorm(config.n_embd, bias=config.bias),
+                )
+            )
             self.lm_head = nn.Linear(config.n_embd, config.in_size, bias=False)
             # with weight tying when using torch.compile() some warnings get generated:
             # "UserWarning: functional_call was passed multiple values for tied weights.
             # This behavior is deprecated and will be an error in future versions"
             # not 100% sure what this is, so far seems to be harmless. TODO investigate
-            self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+            self.transformer.wte.weight = (
+                self.lm_head.weight
+            )  # https://paperswithcode.com/method/weight-tying
         else:
             assert unembedder is not None
-            self.embedder=embedder
-            for key,embedder in self.embedder.items():
-                if isinstance(embedder,nn.Module):
-                    self.add_module("embedder_"+key,embedder)
-                    self.embedder[key]=getattr(self,"embedder_"+key)
-            self.unembedder=unembedder
+            self.embedder = embedder
+            for key, embedder in self.embedder.items():
+                if isinstance(embedder, nn.Module):
+                    self.add_module("embedder_" + key, embedder)
+                    self.embedder[key] = getattr(self, "embedder_" + key)
+            self.unembedder = unembedder
             for unembedder in self.unembedder.items():
-                if isinstance(unembedder,nn.Module):
-                    self.add_module("unembedder_"+key,unembedder)
-                    self.unembedder[key]=getattr(self,"unembedder_"+key)
-            self.transformer = nn.ModuleDict(dict(
-                wpe = nn.Embedding(config.block_size, config.n_embd) if config.pos_embed else None,
-                drop = nn.Dropout(config.dropout),
-                h = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layer)]),
-                ln_f = LayerNorm(config.n_embd, bias=config.bias),
-            ))
+                if isinstance(unembedder, nn.Module):
+                    self.add_module("unembedder_" + key, unembedder)
+                    self.unembedder[key] = getattr(self, "unembedder_" + key)
+            self.transformer = nn.ModuleDict(
+                dict(
+                    wpe=(
+                        nn.Embedding(config.block_size, config.n_embd)
+                        if config.pos_embed
+                        else None
+                    ),
+                    drop=nn.Dropout(config.dropout),
+                    h=nn.ModuleList(
+                        [TransformerBlock(config) for _ in range(config.n_layer)]
+                    ),
+                    ln_f=LayerNorm(config.n_embd, bias=config.bias),
+                )
+            )
 
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+            if pn.endswith("c_proj.weight"):
+                torch.nn.init.normal_(
+                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
+                )
 
     def forward(self, x):
         if self.embedder is not None:
             assert isinstance(x, dict)
-            x_dict=x
-            x=x_dict["x"]
+            x_dict = x
+            x = x_dict["x"]
         device = x.device
         if self.config.tokenized:
             b, t = x.size()
         else:
             b, t, c = x.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        assert (
+            t <= self.config.block_size
+        ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
 
         if self.embedder is None:
-            tok_emb = self.transformer.wte(x) # token embeddings of shape (b, t, n_embd)
+            tok_emb = self.transformer.wte(
+                x
+            )  # token embeddings of shape (b, t, n_embd)
             if self.config.pos_embed:
-                pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-                pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+                pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
+                pos_emb = self.transformer.wpe(
+                    pos
+                )  # position embeddings of shape (t, n_embd)
                 tok_emb = tok_emb + pos_emb
             x = self.transformer.drop(tok_emb)
             for block in self.transformer.h:
@@ -482,23 +574,23 @@ class Transformer(nn.Module):
             logits = self.lm_head(x)
             return logits
         else:
-            emb=self.embedder["x"](x)
+            emb = self.embedder["x"](x)
             if self.config.pos_embed:
-                pos=torch.arange(0,t,dtype=torch.long,device=device)
+                pos = torch.arange(0, t, dtype=torch.long, device=device)
                 if "pos" in self.embedder:
-                    pos_emb=self.embedder["pos"](pos)
+                    pos_emb = self.embedder["pos"](pos)
                 else:
-                    pos_emb=self.transformer.wpe(pos)
-                emb=emb+pos_emb
+                    pos_emb = self.transformer.wpe(pos)
+                emb = emb + pos_emb
             for key in x_dict.keys():
-                if key in ["x","pos"]:
+                if key in ["x", "pos"]:
                     continue
-                emb=emb+self.embedder[key](x_dict[key])
-            x=self.transformer.drop(emb)
+                emb = emb + self.embedder[key](x_dict[key])
+            x = self.transformer.drop(emb)
             for block in self.transformer["h"]:
-                x=block(x)
-            x=self.transformer.ln_f(x)
-            res=self.unembedder["x"](x)
+                x = block(x)
+            x = self.transformer.ln_f(x)
+            res = self.unembedder["x"](x)
             return res
 
     def _init_weights(self, module):
@@ -515,41 +607,46 @@ class Transformer(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+        self.transformer.wpe.weight = nn.Parameter(
+            self.transformer.wpe.weight[:block_size]
+        )
         for block in self.transformer.h:
-            if hasattr(block.attn, 'bias'):
-                block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
+            if hasattr(block.attn, "bias"):
+                block.attn.bias = block.attn.bias[:, :, :block_size, :block_size]
 
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
-        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
-        override_args = override_args or {} # default to empty dict
+        assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
+        override_args = override_args or {}  # default to empty dict
         # only dropout can be overridden see more notes below
-        assert all(k == 'dropout' for k in override_args)
+        assert all(k == "dropout" for k in override_args)
         from transformers import GPT2LMHeadModel
+
         print("loading weights from pretrained gpt: %s" % model_type)
 
         # n_layer, n_head and n_embd are determined from model_type
         config_args = {
-            'gpt2':         dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
-            'gpt2-medium':  dict(n_layer=24, n_head=16, n_embd=1024), # 350M params
-            'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
-            'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
+            "gpt2": dict(n_layer=12, n_head=12, n_embd=768),  # 124M params
+            "gpt2-medium": dict(n_layer=24, n_head=16, n_embd=1024),  # 350M params
+            "gpt2-large": dict(n_layer=36, n_head=20, n_embd=1280),  # 774M params
+            "gpt2-xl": dict(n_layer=48, n_head=25, n_embd=1600),  # 1558M params
         }[model_type]
         print("forcing in_size=50257, block_size=1024, bias=True")
-        config_args['in_size'] = 50257 # always 50257 for GPT model checkpoints
-        config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
-        config_args['bias'] = True # always True for GPT model checkpoints
+        config_args["in_size"] = 50257  # always 50257 for GPT model checkpoints
+        config_args["block_size"] = 1024  # always 1024 for GPT model checkpoints
+        config_args["bias"] = True  # always True for GPT model checkpoints
         # we can override the dropout rate, if desired
-        if 'dropout' in override_args:
+        if "dropout" in override_args:
             print(f"overriding dropout rate to {override_args['dropout']}")
-            config_args['dropout'] = override_args['dropout']
+            config_args["dropout"] = override_args["dropout"]
         # create a from-scratch initialized minGPT model
         config = GPTConfig(**config_args)
         model = Transformer(config)
         sd = model.state_dict()
         sd_keys = sd.keys()
-        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
+        sd_keys = [
+            k for k in sd_keys if not k.endswith(".attn.bias")
+        ]  # discard this mask / buffer, not a param
 
         # init a huggingface/transformers model
         model_hf = GPT2LMHeadModel.from_pretrained(model_type)
@@ -557,12 +654,23 @@ class Transformer(nn.Module):
 
         # copy while ensuring all of the parameters are aligned and match in names and shapes
         sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
+        sd_keys_hf = [
+            k for k in sd_keys_hf if not k.endswith(".attn.masked_bias")
+        ]  # ignore these, just a buffer
+        sd_keys_hf = [
+            k for k in sd_keys_hf if not k.endswith(".attn.bias")
+        ]  # same, just the mask (buffer)
+        transposed = [
+            "attn.c_attn.weight",
+            "attn.c_proj.weight",
+            "mlp.c_fc.weight",
+            "mlp.c_proj.weight",
+        ]
         # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
         # this means that we have to transpose these weights when we import them
-        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        assert len(sd_keys_hf) == len(
+            sd_keys
+        ), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
         for k in sd_keys_hf:
             if any(k.endswith(w) for w in transposed):
                 # special treatment for the Conv1D weights we need to transpose
@@ -587,35 +695,41 @@ class Transformer(nn.Module):
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
         optim_groups = [
-            {'params': decay_params, 'weight_decay': weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": nodecay_params, "weight_decay": 0.0},
         ]
         num_decay_params = sum(p.numel() for p in decay_params)
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        print(
+            f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+        )
+        print(
+            f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+        )
         # Create AdamW optimizer and use the fused version if it is available
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
+        fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == "cuda"
         extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=learning_rate, betas=betas, **extra_args
+        )
         print(f"using fused AdamW: {use_fused}")
 
         return optimizer
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """ estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS """
+        """estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS"""
         # first estimate the number of flops we do per iteration.
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
         cfg = self.config
-        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
-        flops_per_token = 6*N + 12*L*H*Q*T
+        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd // cfg.n_head, cfg.block_size
+        flops_per_token = 6 * N + 12 * L * H * Q * T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
-        flops_achieved = flops_per_iter * (1.0/dt) # per second
-        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        flops_achieved = flops_per_iter * (1.0 / dt)  # per second
+        flops_promised = 312e12  # A100 GPU bfloat16 peak flops is 312 TFLOPS
         mfu = flops_achieved / flops_promised
         return mfu
 
@@ -628,7 +742,11 @@ class Transformer(nn.Module):
         """
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            idx_cond = (
+                idx
+                if idx.size(1) <= self.config.block_size
+                else idx[:, -self.config.block_size :]
+            )
 
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
@@ -637,7 +755,7 @@ class Transformer(nn.Module):
             # optionally crop the logits to only the top k options
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
+                logits[logits < v[:, [-1]]] = -float("Inf")
             # apply softmax to convert logits to (normalized) probabilities
             probs = F.softmax(logits, dim=-1)
             # sample from the distribution

@@ -129,10 +129,10 @@ class ResNetBlock(nn.Module):
                 ch_in, ch_out, dim=self.dim, kernel_size=1, padding=0
             )
 
-    def forward(self, x, conditionings=None, hack=False):
+    def forward(self, x, conditionings=None, alpha=False, beta=1):
         hidden = self.net1(x)
 
-        if hack:
+        if alpha:
             color_input = torch.zeros(conditionings[1].shape[1]).to(
                 self.cond_projs[1][0].weight.device
             )
@@ -175,7 +175,7 @@ class ResNetBlock(nn.Module):
                 # conditioning: [16, 11]
                 # conditioning_: [16, 64]
                 conditioning_ = self.cond_projs[i](conditioning)
-                if hack and i == 1:
+                if alpha and i == 1:
                     blue_comp = einsum(
                         "batch dim, dim -> batch", conditioning_, blue_vec_normed
                     )
@@ -187,8 +187,11 @@ class ResNetBlock(nn.Module):
                             (conditioning_.shape[0], 1)
                         ),
                     )
+
+                    curr = conditioning_ + (alpha * blue_comps)
+
                     large_comp = einsum(
-                        "batch dim, dim -> batch", blue_comps, large_vec_normed
+                        "batch dim, dim -> batch", curr, large_vec_normed
                     )
                     large_comps = einsum(
                         "batch, batch dim -> batch dim",
@@ -198,33 +201,39 @@ class ResNetBlock(nn.Module):
                         ),
                     )
 
-                    curr = blue_comps - large_comps
+                    curr = curr - (beta * large_comps)
+                    # curr = blue_comps
 
-                    #small_comp_scales = einsum(
+                    # small_comp_scales = einsum(
                     #    "batch dim, dim -> batch", curr, small_vec_normed
-                    #)
-                    #small_comps = einsum(
+                    # )
+                    # small_comps = einsum(
                     #    "batch, batch dim -> batch dim",
                     #    small_comp_scales,
                     #    small_vec_normed.unsqueeze(0).repeat(
                     #        (conditioning_.shape[0], 1)
                     #    ),
-                    #)
+                    # )
+                    # curr = curr + small_comps
 
-                    red_comp_scales = einsum(
-                        "batch dim, dim -> batch", conditioning_, red_vec_normed
-                    )
-                    red_comps = einsum(
-                        "batch, batch dim -> batch dim",
-                        red_comp_scales,
-                        red_vec_normed.unsqueeze(0).repeat((conditioning_.shape[0], 1)),
-                    )
-                    without_red = conditioning_ - red_comps
-                    hidden = (
-                        hidden
-                        + conditioning_[:, :, None, None]
-                        + (hack * curr[:, :, None, None])
-                    )
+                    # red_comp_scales = einsum(
+                    #    "batch dim, dim -> batch", conditioning_, red_vec_normed
+                    # )
+                    # red_comps = einsum(
+                    #    "batch, batch dim -> batch dim",
+                    #    red_comp_scales,
+                    #    red_vec_normed.unsqueeze(0).repeat((conditioning_.shape[0], 1)),
+                    # )
+                    # without_red = conditioning_ - red_comps
+
+                    # v1:
+                    # hidden = (
+                    #    hidden
+                    #    + conditioning_[:, :, None, None]
+                    #    + (alpha * curr[:, :, None, None])
+                    # )
+                    # v2:
+                    hidden = hidden + curr[:, :, None, None]
 
                 else:
                     if self.dim == 2:
@@ -255,9 +264,9 @@ class ResNetDown(nn.Module):
             padding=0,
         )
 
-    def forward(self, x, conditionings, no_down=False, hack=False):
+    def forward(self, x, conditionings, no_down=False, alpha=False, beta=1):
         for i, resnet_block in enumerate(self.resnet_blocks):
-            x = resnet_block(x, conditionings, hack=hack)
+            x = resnet_block(x, conditionings, alpha=alpha, beta=beta)
             if self.attention_blocks is not None:
                 x = self.attention_blocks[i](x)
         if no_down:
@@ -286,9 +295,9 @@ class ResNetUp(nn.Module):
             transposed=True,
         )
 
-    def forward(self, x, x_skip=None, conditionings=None, no_up=False, hack=False):
+    def forward(self, x, x_skip=None, conditionings=None, no_up=False, alpha=False, beta=1):
         for i, resnet_block in enumerate(self.resnet_blocks):
-            x = resnet_block(x, conditionings, hack=hack)
+            x = resnet_block(x, conditionings, alpha=alpha, beta=beta)
             if self.attention_blocks is not None:
                 x = self.attention_blocks[i](x)
         if not no_up:
