@@ -1,0 +1,11 @@
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.247_sep_size=0.4/seed=300.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.174_sep_size=0.4/seed=200.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.321_sep_size=0.4/seed=400.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.432_sep_size=0.4/seed=0.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.432_sep_size=0.4/seed=100.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.137_sep_size=0.4/seed=300.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.1_sep_size=0.4/seed=200.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.726_sep_size=0.4/seed=400.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.8_sep_size=0.4/seed=0.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.8_sep_size=0.4/seed=100.yaml
+/n/home12/cfpark00/ML/ToyCompDiff/yamls/images_1/2x2_final2/col_sweep_cfg_long2/sep_col=0.579_sep_size=0.4/seed=300.yaml
